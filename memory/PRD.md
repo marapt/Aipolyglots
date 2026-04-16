@@ -70,7 +70,17 @@ User wanted to recover their Polyglot AI project from a previous Emergent sessio
 - [x] WhatsApp & Phone webhooks
 - [x] Widget & Chrome extension documentation
 
-### P1 (Next)
+### Iteration 5 (April 16, 2026) - Security Hardening
+- API keys SHA-256 hashed at rest (raw keys never stored in database)
+- Full key shown only once at creation, masked everywhere else
+- Per-key rate limiting (configurable requests/minute, default: 30)
+- Daily usage caps (configurable requests/day, default: 1,000)
+- Scoped permissions: read-only, translate, full
+- Key revocation via DELETE /api/keys/{id}
+- Security & Privacy documentation tab
+- Code examples use environment variables with security warnings
+- Fixed bug: revoked keys were still authenticating (added active:true filter)
+- 20/20 backend tests passing, all frontend UI tests passing
 - [ ] Connect Twilio for live WhatsApp/Phone testing
 - [ ] Build actual Chrome extension package (downloadable .zip)
 - [ ] Build working widget.js hosted endpoint
