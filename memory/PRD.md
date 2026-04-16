@@ -47,6 +47,15 @@ User wanted to recover their Polyglot AI project from a previous Emergent sessio
 - Embeddable widget documentation and code
 - Chrome extension code (manifest.json + content.js)
 - WhatsApp webhook endpoint (/api/webhooks/whatsapp) - ready for Twilio
+
+### Iteration 4 (April 16, 2026) - Widget, Chrome Extension, Deployment
+- Hosted widget.js file served at /widget.js (floating translation panel for any website)
+- Chrome extension with manifest v3 (content.js, popup.html, background.js, icons)
+- Downloadable extension .zip at /polyglot-chrome-extension.zip
+- Updated Integrations page with download button and embed code
+- Fixed .gitignore blocking .env files (deployment blocker)
+- Deployment health check: ALL CHECKS PASSED - READY FOR DEPLOYMENT
+- 21/21 backend tests passing, all frontend UI tests passing
 - Phone call webhook endpoint (/api/webhooks/voice) - ready for Twilio
 - API documentation endpoint (/api/docs/endpoints)
 - Integrations page with 5 sub-sections (REST API, Widget, Chrome Extension, WhatsApp, Phone Calls)
