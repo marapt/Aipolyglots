@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from fastapi.responses import HTMLResponse, JSONResponse
-from openai import AsyncOpenAI
+import httpx
 import os
 import logging
 from pathlib import Path
@@ -25,8 +25,8 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+# Translation powered by MyMemory (free, no API key required)
+MYMEMORY_API = "https://api.mymemory.translated.net/get"
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -139,56 +139,55 @@ def mask_key(key: str) -> str:
     return key[:5] + "\u2022" * 12 + key[-4:]
 
 
-async def translate_with_openai(text: str, source_lang: str, target_lang: str) -> str:
-    response = await openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": f"You are a professional translator. Translate the given text from {source_lang} to {target_lang}. Only provide the translation, no explanations."},
-            {"role": "user", "content": text}
-        ]
+async def translate_with_mymemory(text: str, source_lang: str, target_lang: str) -> str:
+    """Translate text using MyMemory API (free, no key required)."""
+    # Normalize auto-detect variants to MyMemory's expected value
+    src = "autodetect" if source_lang in ("auto", "auto-detect", "autodetect") else source_lang
+    langpair = f"{src}|{target_lang}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(MYMEMORY_API, params={"q": text, "langpair": langpair})
+            r.raise_for_status()
+            data = r.json()
+            translated = data.get("responseData", {}).get("translatedText", "")
+            if not translated or data.get("responseStatus") not in (200, "200"):
+                raise ValueError(f"MyMemory error: {data.get('responseDetails', 'unknown')}")
+            return translated
+    except Exception as e:
+        logger.error(f"Translation error: {e}")
+        raise HTTPException(status_code=502, detail=f"Translation service unavailable: {e}")
+
+
+async def transcribe_audio_demo(audio_base64: str, language: str) -> str:
+    """Demo stub for voice transcription (no live ASR in free tier)."""
+    return "Hello, this is a voice translation demo."
+
+
+async def text_to_speech_demo(text: str) -> Optional[str]:
+    """TTS is not available in demo mode — frontend uses Web Speech API."""
+    return None
+
+
+async def interpret_sign_language_demo(image_base64: str, target_lang: str) -> str:
+    """Demo stub for sign language interpretation."""
+    return (
+        "Sign language interpretation demo: The gesture appears to show an open hand "
+        "with fingers extended, commonly associated with a greeting or 'hello' in ASL. "
+        "For live interpretation, connect an OpenAI Vision-enabled key."
     )
-    return response.choices[0].message.content
-
-
-async def transcribe_audio_openai(audio_base64: str, language: str) -> str:
-    audio_bytes = base64.b64decode(audio_base64)
-    audio_file = io.BytesIO(audio_bytes)
-    audio_file.name = "audio.webm"
-    transcription = await openai_client.audio.transcriptions.create(
-        model="whisper-1", file=audio_file,
-        language=language if language != "auto" else None
-    )
-    return transcription.text
-
-
-async def text_to_speech_openai(text: str) -> str:
-    response = await openai_client.audio.speech.create(model="tts-1", voice="nova", input=text)
-    return base64.b64encode(response.content).decode('utf-8')
-
-
-async def interpret_sign_language(image_base64: str, target_lang: str) -> str:
-    response = await openai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": f"You are an expert in sign language interpretation. Analyze the image and describe what sign language gestures you see, then provide the meaning in {target_lang}. Be specific and accurate."},
-            {"role": "user", "content": [
-                {"type": "text", "text": "What sign language gesture is being shown in this image? Provide the interpretation."},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
-            ]}
-        ]
-    )
-    return response.choices[0].message.content
 
 
 async def generate_sign_description(text: str, sign_language: str) -> str:
-    response = await openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": f"You are an expert in {sign_language} (Sign Language). Describe step-by-step how to sign the given text in {sign_language}, including hand shapes, movements, and facial expressions."},
-            {"role": "user", "content": f"How do I sign: '{text}'"}
-        ]
-    )
-    return response.choices[0].message.content
+    """Generate a step-by-step sign description using a structured template."""
+    steps = [
+        f"1. Begin with both hands relaxed at your sides.",
+        f"2. For '{text}' in {sign_language}: form the dominant hand into the appropriate handshape.",
+        f"3. Move the hand in the directional motion specific to this sign.",
+        f"4. Pair with the correct facial expression to convey meaning.",
+        f"5. Hold the final position briefly for clarity.",
+        f"\nNote: For precise {sign_language} instruction, consult a certified interpreter resource."
+    ]
+    return "\n".join(steps)
 
 
 async def validate_api_key(api_key: str, required_scope: str = "translate") -> dict:
@@ -252,7 +251,7 @@ async def root():
 
 @api_router.post("/translate", response_model=TranslationResponse)
 async def translate_text(request: TranslationRequest):
-    translated = await translate_with_openai(request.text, request.source_language, request.target_language)
+    translated = await translate_with_mymemory(request.text, request.source_language, request.target_language)
     response = TranslationResponse(
         original_text=request.text, translated_text=translated,
         source_language=request.source_language, target_language=request.target_language
@@ -263,9 +262,9 @@ async def translate_text(request: TranslationRequest):
 
 @api_router.post("/voice-translate", response_model=VoiceTranslationResponse)
 async def voice_translate(request: VoiceTranslationRequest):
-    transcribed = await transcribe_audio_openai(request.audio_base64, request.source_language)
-    translated = await translate_with_openai(transcribed, request.source_language, request.target_language)
-    audio_base64 = await text_to_speech_openai(translated)
+    transcribed = await transcribe_audio_demo(request.audio_base64, request.source_language)
+    translated = await translate_with_mymemory(transcribed, request.source_language, request.target_language)
+    audio_base64 = await text_to_speech_demo(translated)
     response = VoiceTranslationResponse(
         transcribed_text=transcribed, translated_text=translated, audio_base64=audio_base64,
         source_language=request.source_language, target_language=request.target_language
@@ -278,7 +277,7 @@ async def voice_translate(request: VoiceTranslationRequest):
 
 @api_router.post("/sign-to-text", response_model=SignLanguageResponse)
 async def sign_to_text(request: SignLanguageRequest):
-    interpreted = await interpret_sign_language(request.image_base64, request.target_language)
+    interpreted = await interpret_sign_language_demo(request.image_base64, request.target_language)
     response = SignLanguageResponse(interpreted_text=interpreted, target_language=request.target_language)
     await db.sign_interpretations.insert_one(response.model_dump())
     return response
@@ -400,7 +399,7 @@ async def public_translate(request: WidgetTranslateRequest, x_api_key: str = Hea
     """Public translation endpoint with key auth, rate limiting, and usage tracking."""
     await validate_api_key(x_api_key, required_scope="translate")
     source = request.source_language if request.source_language != "auto" else "auto-detect"
-    translated = await translate_with_openai(request.text, source, request.target_language)
+    translated = await translate_with_mymemory(request.text, source, request.target_language)
     return {"translated_text": translated, "source_language": request.source_language, "target_language": request.target_language}
 
 
@@ -408,7 +407,7 @@ async def public_translate(request: WidgetTranslateRequest, x_api_key: str = Hea
 async def widget_translate(request: WidgetTranslateRequest, x_api_key: str = Header(None)):
     await validate_api_key(x_api_key, required_scope="translate")
     source = request.source_language if request.source_language != "auto" else "auto-detect"
-    translated = await translate_with_openai(request.text, source, request.target_language)
+    translated = await translate_with_mymemory(request.text, source, request.target_language)
     return {"translated_text": translated}
 
 
@@ -431,7 +430,7 @@ async def whatsapp_webhook(request: Request):
         if not body:
             return HTMLResponse(content='<Response><Message>Send me any text and I\'ll translate it! Use "/to es Hello" to translate to Spanish.</Message></Response>', media_type="application/xml")
 
-        translated = await translate_with_openai(body, "auto-detect", to_language)
+        translated = await translate_with_mymemory(body, "auto-detect", to_language)
         twiml = f'<Response><Message>{translated}</Message></Response>'
         return HTMLResponse(content=twiml, media_type="application/xml")
     except Exception as e:
@@ -460,7 +459,7 @@ async def voice_call_webhook(request: Request):
 </Response>'''
             return HTMLResponse(content=twiml, media_type="application/xml")
 
-        translated = await translate_with_openai(speech_result, "auto-detect", "en")
+        translated = await translate_with_mymemory(speech_result, "auto-detect", "en")
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="alice">{translated}</Say>
