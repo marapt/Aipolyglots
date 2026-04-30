@@ -9,11 +9,11 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: CORS_ORIGINS
-        value: "*"
+        value: "https://aipolyglots.com,https://www.aipolyglots.com"
       # These variables must be populated in the Render dashboard manually for security
       - key: MONGO_URL
         sync: false
       - key: DB_NAME
         sync: false
-      - key: EMERGENT_LLM_KEY
+      - key: OPENAI_API_KEY
         sync: false

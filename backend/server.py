@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from fastapi.responses import HTMLResponse, JSONResponse
+from openai import AsyncOpenAI
 import os
 import logging
 from pathlib import Path
@@ -17,8 +18,6 @@ import io
 import time
 from collections import defaultdict
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
-
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -26,7 +25,8 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -140,17 +140,17 @@ def mask_key(key: str) -> str:
 
 
 async def translate_with_openai(text: str, source_lang: str, target_lang: str) -> str:
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"translate_{uuid.uuid4()}",
-        system_message=f"You are a professional translator. Translate the given text from {source_lang} to {target_lang}. Only provide the translation, no explanations."
-    ).with_model("openai", "gpt-4o-mini")
-    return await chat.send_message(UserMessage(text=text))
+    response = await openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": f"You are a professional translator. Translate the given text from {source_lang} to {target_lang}. Only provide the translation, no explanations."},
+            {"role": "user", "content": text}
+        ]
+    )
+    return response.choices[0].message.content
 
 
 async def transcribe_audio_openai(audio_base64: str, language: str) -> str:
-    from openai import AsyncOpenAI
-    openai_client = AsyncOpenAI(api_key=EMERGENT_LLM_KEY, base_url="https://emergentintegrations-production.up.railway.app/api/v1")
     audio_bytes = base64.b64decode(audio_base64)
     audio_file = io.BytesIO(audio_bytes)
     audio_file.name = "audio.webm"
@@ -162,31 +162,33 @@ async def transcribe_audio_openai(audio_base64: str, language: str) -> str:
 
 
 async def text_to_speech_openai(text: str) -> str:
-    from openai import AsyncOpenAI
-    openai_client = AsyncOpenAI(api_key=EMERGENT_LLM_KEY, base_url="https://emergentintegrations-production.up.railway.app/api/v1")
     response = await openai_client.audio.speech.create(model="tts-1", voice="nova", input=text)
     return base64.b64encode(response.content).decode('utf-8')
 
 
 async def interpret_sign_language(image_base64: str, target_lang: str) -> str:
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"sign_{uuid.uuid4()}",
-        system_message=f"You are an expert in sign language interpretation. Analyze the image and describe what sign language gestures you see, then provide the meaning in {target_lang}. Be specific and accurate."
-    ).with_model("openai", "gpt-4o")
-    return await chat.send_message(UserMessage(
-        text="What sign language gesture is being shown in this image? Provide the interpretation.",
-        image_urls=[f"data:image/jpeg;base64,{image_base64}"]
-    ))
+    response = await openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": f"You are an expert in sign language interpretation. Analyze the image and describe what sign language gestures you see, then provide the meaning in {target_lang}. Be specific and accurate."},
+            {"role": "user", "content": [
+                {"type": "text", "text": "What sign language gesture is being shown in this image? Provide the interpretation."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+            ]}
+        ]
+    )
+    return response.choices[0].message.content
 
 
 async def generate_sign_description(text: str, sign_language: str) -> str:
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"sign_desc_{uuid.uuid4()}",
-        system_message=f"You are an expert in {sign_language} (Sign Language). Describe step-by-step how to sign the given text in {sign_language}, including hand shapes, movements, and facial expressions."
-    ).with_model("openai", "gpt-4o-mini")
-    return await chat.send_message(UserMessage(text=f"How do I sign: '{text}'"))
+    response = await openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": f"You are an expert in {sign_language} (Sign Language). Describe step-by-step how to sign the given text in {sign_language}, including hand shapes, movements, and facial expressions."},
+            {"role": "user", "content": f"How do I sign: '{text}'"}
+        ]
+    )
+    return response.choices[0].message.content
 
 
 async def validate_api_key(api_key: str, required_scope: str = "translate") -> dict:
