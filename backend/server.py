@@ -139,23 +139,42 @@ def mask_key(key: str) -> str:
     return key[:5] + "\u2022" * 12 + key[-4:]
 
 
+LIBRETRANSLATE_API = "https://translate.argosopentech.com/translate"
+
 async def translate_with_mymemory(text: str, source_lang: str, target_lang: str) -> str:
-    """Translate text using MyMemory API (free, no key required)."""
-    # Normalize auto-detect variants to MyMemory's expected value
+    """Translate text using MyMemory (primary) with LibreTranslate fallback. Both free, no key required."""
     src = "autodetect" if source_lang in ("auto", "auto-detect", "autodetect") else source_lang
     langpair = f"{src}|{target_lang}"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(MYMEMORY_API, params={"q": text, "langpair": langpair})
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # --- Primary: MyMemory (email param = higher daily quota) ---
+        try:
+            r = await client.get(MYMEMORY_API, params={
+                "q": text, "langpair": langpair, "de": "aipolyglots@demo.com"
+            })
+            if r.status_code == 200:
+                data = r.json()
+                translated = data.get("responseData", {}).get("translatedText", "")
+                status = data.get("responseStatus")
+                if translated and status in (200, "200"):
+                    return translated
+        except Exception as e:
+            logger.warning(f"MyMemory failed: {e}, trying fallback...")
+
+        # --- Fallback: LibreTranslate (Argos open instance) ---
+        try:
+            src_lt = "auto" if src == "autodetect" else src
+            r = await client.post(LIBRETRANSLATE_API, json={
+                "q": text, "source": src_lt, "target": target_lang, "format": "text"
+            })
             r.raise_for_status()
-            data = r.json()
-            translated = data.get("responseData", {}).get("translatedText", "")
-            if not translated or data.get("responseStatus") not in (200, "200"):
-                raise ValueError(f"MyMemory error: {data.get('responseDetails', 'unknown')}")
-            return translated
-    except Exception as e:
-        logger.error(f"Translation error: {e}")
-        raise HTTPException(status_code=502, detail=f"Translation service unavailable: {e}")
+            translated = r.json().get("translatedText", "")
+            if translated:
+                return translated
+        except Exception as e:
+            logger.error(f"LibreTranslate fallback also failed: {e}")
+
+    raise HTTPException(status_code=502, detail="Translation services temporarily unavailable. Please try again shortly.")
 
 
 async def transcribe_audio_demo(audio_base64: str, language: str) -> str:
